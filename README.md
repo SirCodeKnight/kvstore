@@ -52,14 +52,7 @@ kvstore-cli get mykey
 
 For complete setup instructions, see the [Getting Started Guide](docs/getting-started.md).
 
-## Documentation
 
-- [Architecture Overview](docs/architecture.md)
-- [Configuration Reference](docs/configuration.md)
-- [API Documentation](docs/api.md)
-- [Deployment Guide](docs/deployment.md)
-- [Performance Tuning](docs/performance.md)
-- [Contributing](docs/contributing.md)
 
 ## Docker & Kubernetes
 
