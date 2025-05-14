@@ -66,6 +66,4 @@ docker run -p 8080:8080 -p 7000:7000 sirscodeknight/kvstore:latest
 kubectl apply -f https://raw.githubusercontent.com/SirCodeKnight/kvstore/main/deployment/k8s/cluster.yaml
 ```
 
-## License
 
-MIT License - Created by raayanTamuly
