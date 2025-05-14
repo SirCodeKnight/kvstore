@@ -1,0 +1,198 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kvstore
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kvstore-config
+  namespace: kvstore
+data:
+  config.yaml: |
+    storage: "disk"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kvstore-headless
+  namespace: kvstore
+  labels:
+    app: kvstore
+spec:
+  clusterIP: None
+  selector:
+    app: kvstore
+  ports:
+  - name: http
+    port: 8080
+    targetPort: 8080
+  - name: raft
+    port: 7000
+    targetPort: 7000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kvstore
+  namespace: kvstore
+  labels:
+    app: kvstore
+spec:
+  type: ClusterIP
+  selector:
+    app: kvstore
+  ports:
+  - name: http
+    port: 8080
+    targetPort: 8080
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: kvstore
+  namespace: kvstore
+spec:
+  serviceName: kvstore-headless
+  replicas: 3
+  selector:
+    matchLabels:
+      app: kvstore
+  template:
+    metadata:
+      labels:
+        app: kvstore
+    spec:
+      containers:
+      - name: kvstore
+        image: sirscodeknight/kvstore:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8080
+          name: http
+        - containerPort: 7000
+          name: raft
+        env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        command:
+        - "/bin/sh"
+        - "-c"
+        - |
+          # Get pod ordinal from hostname
+          ORDINAL=$(echo $POD_NAME | grep -o '[0-9]\+$')
+          
+          # Configure node
+          if [ "$ORDINAL" = "0" ]; then
+            # First node - bootstrap the cluster
+            kvstore-server \
+              --id="${POD_NAME}.kvstore-headless.${POD_NAMESPACE}.svc.cluster.local" \
+              --http-addr="0.0.0.0:8080" \
+              --raft-addr="0.0.0.0:7000" \
+              --data-dir="/data" \
+              --bootstrap \
+              --storage="disk"
+          else
+            # Other nodes - join the cluster
+            # Wait for first node to be ready
+            until nc -z kvstore-0.kvstore-headless.${POD_NAMESPACE}.svc.cluster.local 7000; do
+              echo "Waiting for first node..."
+              sleep 2
+            done
+            
+            kvstore-server \
+              --id="${POD_NAME}.kvstore-headless.${POD_NAMESPACE}.svc.cluster.local" \
+              --http-addr="0.0.0.0:8080" \
+              --raft-addr="0.0.0.0:7000" \
+              --data-dir="/data" \
+              --join="kvstore-0.kvstore-headless.${POD_NAMESPACE}.svc.cluster.local:7000" \
+              --storage="disk"
+          fi
+        volumeMounts:
+        - name: data
+          mountPath: /data
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 15
+          periodSeconds: 20
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: 1000m
+            memory: 1Gi
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      resources:
+        requests:
+          storage: 10Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kvstore-metrics
+  namespace: kvstore
+  labels:
+    app: kvstore
+spec:
+  selector:
+    app: kvstore
+  ports:
+  - name: metrics
+    port: 8080
+    targetPort: 8080
+    path: /metrics
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: kvstore
+  namespace: kvstore
+  labels:
+    app: kvstore
+spec:
+  selector:
+    matchLabels:
+      app: kvstore
+  endpoints:
+  - port: metrics
+    path: /metrics
+    interval: 15s
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: kvstore
+  namespace: kvstore
+  annotations:
+    kubernetes.io/ingress.class: "nginx"
+spec:
+  rules:
+  - host: kvstore.example.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: kvstore
+            port:
+              name: http
